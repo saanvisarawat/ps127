@@ -1,0 +1,246 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, Helvetica, sans-serif;
+  background: #111613;
+  color: #f4f7f5;
+}
+
+button,
+select {
+  font: inherit;
+}
+
+.dashboard {
+  min-height: 100vh;
+  padding: 28px;
+  background:
+    radial-gradient(circle at top right, #193526 0%, transparent 32%),
+    #111613;
+}
+
+/* ================= HEADER ================= */
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 28px;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 30px;
+  color: #ffffff;
+}
+
+.header p {
+  margin: 7px 0 0;
+  color: #b4c1b9;
+}
+
+.live-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border: 1px solid #3b7655;
+  border-radius: 20px;
+  background: #18241d;
+  color: #71e39b;
+  font-size: 13px;
+  font-weight: bold;
+}
+
+.live-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #55d987;
+}
+
+/* ================= KPI CARDS ================= */
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 18px;
+  margin-bottom: 22px;
+}
+
+.kpi-card {
+  padding: 20px;
+  background: #1b2420;
+  border: 1px solid #35463d;
+  border-radius: 14px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25);
+}
+
+.kpi-card p {
+  margin: 0 0 14px;
+  color: #b9c5be;
+  font-size: 13px;
+}
+
+.kpi-card h2 {
+  margin: 0 0 8px;
+  font-size: 28px;
+  color: #ffffff;
+}
+
+.kpi-card span {
+  color: #70df98;
+  font-size: 12px;
+}
+
+/* ================= MAIN CONTENT ================= */
+
+.main-grid {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 20px;
+}
+
+.map-card,
+.filter-card {
+  background: #1b2420;
+  border: 1px solid #35463d;
+  border-radius: 14px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25);
+}
+
+.map-card {
+  padding: 20px;
+}
+
+.filter-card {
+  padding: 20px;
+}
+
+.section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 18px;
+}
+
+.section-heading h2,
+.filter-card h2 {
+  margin: 0;
+  color: #ffffff;
+}
+
+.section-heading p {
+  margin: 6px 0 0;
+  color: #b4c1b9;
+  font-size: 13px;
+}
+
+.section-heading button {
+  background: #26362d;
+  color: #e2ebe5;
+  border: 1px solid #486653;
+  border-radius: 8px;
+  padding: 9px 12px;
+}
+
+/* ================= MAP PLACEHOLDER ================= */
+
+.map-placeholder {
+  height: 500px;
+  border-radius: 10px;
+
+  background:
+    linear-gradient(rgba(75, 105, 87, 0.18) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(75, 105, 87, 0.18) 1px, transparent 1px),
+    #26332d;
+
+  background-size: 45px 45px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  border: 1px solid #46584e;
+}
+
+.map-message {
+  text-align: center;
+  color: #c0cbc4;
+}
+
+.map-message span {
+  font-size: 45px;
+}
+
+.map-message h3 {
+  margin: 12px 0 6px;
+  color: #ffffff;
+}
+
+.map-message p {
+  margin: 0;
+  font-size: 13px;
+  color: #b7c3bb;
+}
+
+/* ================= FILTERS ================= */
+
+.filter-card label {
+  display: block;
+  margin-top: 22px;
+  margin-bottom: 8px;
+  color: #c0cbc4;
+  font-size: 13px;
+}
+
+.filter-card select {
+  width: 100%;
+  padding: 11px;
+
+  border-radius: 8px;
+  border: 1px solid #486653;
+
+  background: #26332d;
+  color: #ffffff;
+}
+
+/* ================= FOOTER ================= */
+
+footer {
+  margin-top: 18px;
+  color: #9aa89f;
+  font-size: 12px;
+  text-align: right;
+}
+
+/* ================= RESPONSIVE ================= */
+
+@media (max-width: 900px) {
+  .kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .main-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 550px) {
+  .kpi-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard {
+    padding: 16px;
+  }
+}
+.traffic-map {
+  width: 100%;
+  height: 500px;
+  border-radius: 10px;
+  overflow: hidden;
+}
