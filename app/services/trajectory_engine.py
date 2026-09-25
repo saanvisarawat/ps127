@@ -16,7 +16,7 @@ async def build_trajectory(conn, target_plate: str):
     await conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
     
     query = """
-        SELECT r.plate_text, r.confidence, r.frame_ts, c.id as camera_id, c.lat, c.lon,
+        SELECT r.plate_text, r.confidence, r.frame_ts, r.image_ref, c.id as camera_id, c.lat, c.lon,
                similarity(r.plate_text, $1) as sim_score
         FROM raw_reads r
         JOIN cameras c ON r.camera_id = c.id
@@ -62,7 +62,8 @@ async def build_trajectory(conn, target_plate: str):
                 "timestamp": wp['frame_ts'].isoformat(),
                 "confidence": wp['confidence'],
                 "plate_read": wp['plate_text'],
-                "fuzzy_score": wp['sim_score']
+                "fuzzy_score": wp['sim_score'],
+                "image_ref": wp['image_ref']
             }
         })
 

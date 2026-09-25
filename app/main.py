@@ -1,17 +1,38 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime, timezone
 import asyncpg
 import os
 import json
 
-from app.services.analytics_engine import compute_density, compute_od_matrix, compute_heatmap
-from app.services.trajectory_engine import build_trajectory
-from app.services.alert_engine import check_read_anomalies
+from services.analytics_engine import (
+    compute_density, compute_od_matrix, compute_heatmap,
+    compute_cameras, compute_summary, compute_bottlenecks,
+    compute_timeseries, compute_camera_recent_reads,
+)
+from services.trajectory_engine import build_trajectory
+from services.alert_engine import check_read_anomalies, SEVERITY_BY_RULE, redis_client
+from services.external_reference import get_delhi_vehicle_reference_stats
+from services.delhi_fleet_fetcher import get_cached_fleet_data, start_background_refresh
+import asyncio
 
 app = FastAPI(title="PS127 City-Wide ANPR API")
 
+# Dev-only: the frontend (Vite on :5173) is a different origin than the API (:8000).
+# No cookies/credentials are used, so a wide-open dev policy is safe here.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 DB_URL = os.getenv("DATABASE_URL", "postgresql://ps127_admin:ps127_password@localhost:5432/ps127_db")
+
+@app.on_event("startup")
+async def launch_background_refreshers():
+    asyncio.create_task(start_background_refresh())
 
 # --- WEBSOCKET MANAGER ---
 class ConnectionManager:
@@ -88,17 +109,25 @@ async def ingest_read(read: ReadIngest):
             read.confidence
         )
         if alert_payload:
+            severity = SEVERITY_BY_RULE.get(alert_payload["rule"], "MEDIUM")
+
             # Write an entry to alerts table
-            await conn.execute("""
-                INSERT INTO alerts (plate_text, camera_id, type, confidence, explanation, ts)
-                VALUES ($1, $2, $3, $4, $5, $6)
-            """, read.plate_text, read.camera_id, alert_payload["rule"], alert_payload["confidence"], json.dumps(alert_payload), read.frame_ts)
-            
+            alert_id = await conn.fetchval("""
+                INSERT INTO alerts (plate_text, camera_id, type, confidence, severity, status, acknowledged, explanation, ts)
+                VALUES ($1, $2, $3, $4, $5, 'NEW', FALSE, $6, $7)
+                RETURNING id
+            """, read.plate_text, read.camera_id, alert_payload["rule"], alert_payload["confidence"], severity, json.dumps(alert_payload), read.frame_ts)
+
             # Immediately broadcast the payload to all connected clients
             await manager.broadcast({
+                "id": alert_id,
                 "type": alert_payload["rule"],
                 "plate": read.plate_text,
                 "camera": read.camera_id,
+                "confidence": alert_payload["confidence"],
+                "severity": severity,
+                "status": "NEW",
+                "acknowledged": False,
                 "explanation": alert_payload,
                 "ts": read.frame_ts.isoformat()
             })
@@ -153,29 +182,146 @@ async def get_heatmap(time_bucket: str = None):
         await conn.close()
 
 @app.get("/api/v1/analytics/bottlenecks")
-async def get_bottlenecks():
-    # Stub retained per Module D architecture constraints (requires Eetal's historical baseline simulator)
-    return [{"segment": "CAM_01->CAM_04", "expected_sec": 120, "current_sec": 340}]
+async def get_bottlenecks(window_minutes: int = 60):
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        return await compute_bottlenecks(conn, window_minutes)
+    finally:
+        await conn.close()
 
-# --- BLACKLIST MANAGEMENT & ALERT STUBS ---
+# --- CAMERAS & KPI SUMMARY ---
+@app.get("/api/v1/cameras")
+async def get_cameras():
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        return await compute_cameras(conn)
+    finally:
+        await conn.close()
+
+@app.get("/api/v1/analytics/summary")
+async def get_summary():
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        return await compute_summary(conn)
+    finally:
+        await conn.close()
+
+@app.get("/api/v1/analytics/timeseries")
+async def get_timeseries(window_minutes: int = 120, bucket_minutes: int = 10):
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        return await compute_timeseries(conn, window_minutes, bucket_minutes)
+    finally:
+        await conn.close()
+
+@app.get("/api/v1/external/delhi-vehicle-stats")
+async def get_delhi_vehicle_stats():
+    # Static reference snapshot (not a live external call) — see services/external_reference.py
+    return get_delhi_vehicle_reference_stats()
+
+@app.get("/api/v1/external/delhi-vehicle-fleet-trend")
+async def get_delhi_vehicle_fleet_trend_endpoint():
+    # Separate dataset/source from the snapshot above — see the module docstring
+    # in services/external_reference.py for why these aren't merged.
+    # Always serves from an in-memory cache kept warm by a background task
+    # (services/delhi_fleet_fetcher.py) — never blocks on the upstream site.
+    return get_cached_fleet_data()
+
+@app.get("/api/v1/cameras/{camera_id}/recent-reads")
+async def get_camera_recent_reads(camera_id: str, limit: int = 8):
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        return await compute_camera_recent_reads(conn, camera_id, limit)
+    finally:
+        await conn.close()
+
+# --- ALERTS ---
 @app.get("/api/v1/alerts")
 async def get_alerts(limit: int = 10, unacknowledged_only: bool = True):
-    return [
-        {
-            "plate_text": "DL01AB1234",
-            "camera_id": "CAM_01",
-            "type": "BLACKLIST_HIT",
-            "confidence": 0.98,
-            "explanation": {"rule": "BLACKLIST_MATCH", "details": "Exact match found in registry."},
-            "ts": "2026-09-23T08:15:00Z",
-            "acknowledged": False
-        }
-    ]
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        if unacknowledged_only:
+            query = """
+                SELECT id, plate_text, camera_id, type, confidence, severity, status, acknowledged, explanation, ts
+                FROM alerts WHERE acknowledged = FALSE
+                ORDER BY ts DESC LIMIT $1;
+            """
+        else:
+            query = """
+                SELECT id, plate_text, camera_id, type, confidence, severity, status, acknowledged, explanation, ts
+                FROM alerts
+                ORDER BY ts DESC LIMIT $1;
+            """
+        records = await conn.fetch(query, limit)
+        results = []
+        for r in records:
+            row = dict(r)
+            row["explanation"] = json.loads(row["explanation"])
+            row["ts"] = row["ts"].isoformat()
+            results.append(row)
+        return results
+    finally:
+        await conn.close()
+
+@app.post("/api/v1/alerts/{alert_id}/acknowledge")
+async def acknowledge_alert(alert_id: int):
+    return await _set_alert_status(alert_id, "ACKNOWLEDGED", acknowledged=True)
+
+@app.post("/api/v1/alerts/{alert_id}/dismiss")
+async def dismiss_alert(alert_id: int):
+    return await _set_alert_status(alert_id, "DISMISSED", acknowledged=True)
+
+@app.post("/api/v1/alerts/{alert_id}/escalate")
+async def escalate_alert(alert_id: int):
+    return await _set_alert_status(alert_id, "ESCALATED", acknowledged=True)
+
+async def _set_alert_status(alert_id: int, status: str, acknowledged: bool):
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        result = await conn.fetchrow("""
+            UPDATE alerts SET status = $2, acknowledged = $3
+            WHERE id = $1
+            RETURNING id, status, acknowledged;
+        """, alert_id, status, acknowledged)
+        if not result:
+            raise HTTPException(status_code=404, detail="Alert not found")
+        return dict(result)
+    finally:
+        await conn.close()
+
+# --- BLACKLIST MANAGEMENT ---
+@app.get("/api/v1/blacklist")
+async def list_blacklist():
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        records = await conn.fetch("SELECT plate_text, reason, severity FROM blacklist ORDER BY plate_text;")
+        return [dict(r) for r in records]
+    finally:
+        await conn.close()
 
 @app.post("/api/v1/blacklist")
 async def add_blacklist(entry: BlacklistEntry):
-    return {"status": "added", "plate": entry.plate_text}
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        await conn.execute("""
+            INSERT INTO blacklist (plate_text, reason, severity)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (plate_text) DO UPDATE SET reason = EXCLUDED.reason, severity = EXCLUDED.severity;
+        """, entry.plate_text, entry.reason, entry.severity)
+        # Keep the alert engine's Redis cache in sync so the next read triggers a live alert
+        await redis_client.sadd("blacklist_exact", entry.plate_text)
+        return {"status": "added", "plate": entry.plate_text}
+    finally:
+        await conn.close()
 
 @app.delete("/api/v1/blacklist/{plate}")
 async def delete_blacklist(plate: str):
-    return {"status": "removed", "plate": plate}
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        result = await conn.execute("DELETE FROM blacklist WHERE plate_text = $1;", plate)
+        await redis_client.srem("blacklist_exact", plate)
+        if result == "DELETE 0":
+            raise HTTPException(status_code=404, detail="Plate not found in blacklist")
+        return {"status": "removed", "plate": plate}
+    finally:
+        await conn.close()

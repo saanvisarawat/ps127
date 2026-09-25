@@ -1,8 +1,18 @@
 import redis.asyncio as redis
 from datetime import datetime
+import os
 
-# Connect to the Redis container
-redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+# Connect to the Redis container (host defaults to the docker-compose service name;
+# override with REDIS_HOST for local/non-docker runs)
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
+
+SEVERITY_BY_RULE = {
+    "BLACKLIST_MATCH": "HIGH",
+    "CURFEW_VIOLATION": "HIGH",
+    "ROUTE_CIRCLING": "MEDIUM",
+}
 
 async def check_read_anomalies(plate_text: str, camera_id: str, frame_ts: datetime, read_confidence: float) -> dict | None:
     """
